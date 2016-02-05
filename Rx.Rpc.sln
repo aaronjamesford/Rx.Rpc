@@ -1,0 +1,23 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 2012
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Rx.Rpc", "Rx.Rpc\Rx.Rpc.csproj", "{AFA40447-E2EB-4617-9B18-BFAA84FC380A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Rx.Rpc.Test", "Rx.Rpc.Test\Rx.Rpc.Test.csproj", "{9A80B316-8BFF-4691-A09A-F672ACC47351}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{9A80B316-8BFF-4691-A09A-F672ACC47351}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9A80B316-8BFF-4691-A09A-F672ACC47351}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9A80B316-8BFF-4691-A09A-F672ACC47351}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9A80B316-8BFF-4691-A09A-F672ACC47351}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AFA40447-E2EB-4617-9B18-BFAA84FC380A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AFA40447-E2EB-4617-9B18-BFAA84FC380A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AFA40447-E2EB-4617-9B18-BFAA84FC380A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AFA40447-E2EB-4617-9B18-BFAA84FC380A}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
