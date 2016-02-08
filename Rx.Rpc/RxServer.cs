@@ -1,14 +1,20 @@
 ﻿using System;
-using System.Threading;
-using System.Reactive.Linq;
-using System.Net.Sockets;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
-using System.Text;
-using Newtonsoft.Json;
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using Newtonsoft.Json.Serialization;
+using System.Text;
+using System.Threading;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using Newtonsoft.Json.Serialization;
+using Rx.Rpc.Utils;
 
 namespace Rx.Rpc
 {
@@ -33,21 +39,15 @@ namespace Rx.Rpc
 
 			return Observable.Defer(() => Observable.StartAsync(listener.AcceptTcpClientAsync))
 				.Repeat()
-				.SelectMany(client => {
-					var stream = client.GetStream();
-					var buffer = new byte[512];
-					return Observable.Defer(() => Observable.StartAsync(ct => stream.ReadAsync(buffer, 0, buffer.Length)))
-						.TakeWhile(br => br > 0 && client.Connected)
-						.Select(br => {
-							var res = new byte[br];
-							Buffer.BlockCopy(buffer, 0, res, 0, br);
-							return Tuple.Create(stream, res);
-						})
-						.Repeat();
+				.SelectMany(client => 
+					new StreamReader(client.GetStream()).ToObservable(NetworkUtils.GetMaxMtu(), new EventLoopScheduler())
+						.Select(str => Tuple.Create(client.GetStream(), str)))
+				.SelectMany(t => {
+					var str = t.Item2;
+					return JsonUtils.SplitJsonObjects(str).Select(obj => Tuple.Create(t.Item1, obj)).ToObservable();
 				})
 				.Select(t => {
-					var str = Encoding.UTF8.GetString(t.Item2);
-					var j = JObject.Parse(str);
+					var j = JObject.Parse(t.Item2);
 
 					var seq = j["SequenceNumber"].Value<int>();
 					var content = j["Content"].ToObject<TRequest>();
@@ -55,9 +55,8 @@ namespace Rx.Rpc
 					var subject = new Subject<TResponse>();
 
 					subject.Take(1)
-						.Timeout(TimeSpan.FromSeconds(2))
-						.Subscribe(
-						async resp => {
+						.Timeout(TimeSpan.FromSeconds(59))
+						.Subscribe(resp => {
 							var resWrapper = new ResponseWrapper
 								{
 									SequenceNumber = seq,
@@ -65,7 +64,7 @@ namespace Rx.Rpc
 								};
 
 							var buf = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(resWrapper));
-							await t.Item1.WriteAsync(buf, 0, buf.Length);
+							t.Item1.WriteAsync(buf, 0, buf.Length);
 						},
 						e => {
 							var resWrapper = new ResponseWrapper
@@ -74,7 +73,7 @@ namespace Rx.Rpc
 									Content = new { Error = new { Message = e.Message } }
 								};
 
-								Console.WriteLine(e);
+								Console.WriteLine("Server - {0}", e);
 
 							var buf = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(resWrapper));
 							t.Item1.WriteAsync(buf, 0, buf.Length);

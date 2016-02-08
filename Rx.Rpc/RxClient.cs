@@ -1,15 +1,20 @@
 ﻿using System;
-using System.Runtime.Remoting.Proxies;
-using System.Runtime.Remoting.Messaging;
+using System.Collections.Concurrent;
+using System.IO;
 using System.Net.Sockets;
-using System.Reflection;
-using System.Text;
-using Newtonsoft.Json;
-using System.Reactive.Threading.Tasks;
+using System.Reactive.Concurrency;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
-using Newtonsoft.Json.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Reflection;
+using System.Runtime.Remoting.Messaging;
+using System.Runtime.Remoting.Proxies;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using Rx.Rpc.Utils;
 
 namespace Rx.Rpc
 {
@@ -27,7 +32,14 @@ namespace Rx.Rpc
 			public object Content { get; set; }
 		}
 
-		private int _sequenceNumber = 1;
+		private class ResultInfo
+		{
+			public Type ResultType { get; set; }
+			public MethodInfo ObservableCast { get; set; }
+		}
+
+		private int _sequenceNumber = 0;
+		private ConcurrentDictionary<string, ResultInfo> _resultInfo = new ConcurrentDictionary<string, ResultInfo> ();
 
 		TcpClient _client;
 		IObservable<ResponseWrapper> _reader;
@@ -36,23 +48,16 @@ namespace Rx.Rpc
 			: base(t)
 		{
 			_client = client;
-
-			var buffer = new byte[512];
-			_reader = Observable.Defer(() => Observable.FromAsync(ct => _client.GetStream().ReadAsync(buffer, 0, buffer.Length, ct)))
-				.TakeWhile(br => br > 0 && client.Connected)
-				.Select(br => {
-					var buf = new byte[br];
-					Buffer.BlockCopy(buffer, 0, buf, 0, br);
-
-					var j = JObject.Parse(Encoding.UTF8.GetString(buf));
-
+			_reader = new StreamReader(_client.GetStream()).ToObservable(NetworkUtils.GetMaxMtu(), new EventLoopScheduler())
+				.SelectMany(JsonUtils.SplitJsonObjects)
+				.Select(str => {
+					var j = JObject.Parse(str);
 					return new ResponseWrapper
 					{
 						SequenceNumber = j["SequenceNumber"].ToObject<int>(),
 						Content = JsonConvert.SerializeObject(j["Content"].ToObject<object>())
 					};
-				})
-				.Repeat();
+				});
 		}
 
 		public static TType Create<TType>(TcpClient client)
@@ -66,12 +71,22 @@ namespace Rx.Rpc
 			if (methodCall.InArgCount != 1)
 				return new ReturnMessage(new NotSupportedException ("Must accept only one parameter"), methodCall);
 
-
 			var method = (MethodInfo)methodCall.MethodBase;
-			if (!method.ReturnType.Name.Contains("IObservable"))
-				return new ReturnMessage (new NotSupportedException ("Method must return IObservable"), methodCall);
 
-			var resultType = method.ReturnType.GetGenericArguments()[0];
+			ResultInfo resultInfo;
+			if (!_resultInfo.TryGetValue(method.Name, out resultInfo)) {
+				if (!method.ReturnType.Name.Contains("IObservable"))
+					return new ReturnMessage (new NotSupportedException ("Method must return IObservable"), methodCall);
+
+				resultInfo = new ResultInfo ();
+
+				resultInfo.ResultType = method.ReturnType.GetGenericArguments() [0];
+				resultInfo.ObservableCast = typeof(Observable).GetMethod("Cast")
+					.MakeGenericMethod(resultInfo.ResultType);
+
+				_resultInfo.TryAdd(method.Name, resultInfo);
+			}
+
 			var seq = Interlocked.Add(ref _sequenceNumber, 1);
 
 			var req = new RequestWrapper {
@@ -80,18 +95,16 @@ namespace Rx.Rpc
 			};
 
 			var buf = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(req));
-			_client.GetStream().WriteAsync(buf, 0, buf.Length).Wait();
 
 			var resultObservable = _reader
 				.Where(r => r.SequenceNumber == seq)
-				.Timeout(TimeSpan.FromSeconds(5))
-				.Select(r => JsonConvert.DeserializeObject(r.Content, resultType))
-				.Take(1);
+				.Take(1)
+				.Timeout(TimeSpan.FromSeconds(60))
+				.Select(r => JsonConvert.DeserializeObject(r.Content, resultInfo.ResultType));
 
-			var cast = typeof(Observable).GetMethod("Cast")
-				.MakeGenericMethod(resultType);
-			
-			var result = cast.Invoke(null, new object[] { resultObservable });
+			var result = resultInfo.ObservableCast.Invoke(null, new object[] { resultObservable });
+
+			_client.GetStream().WriteAsync(buf, 0, buf.Length);
 
 			return new ReturnMessage(result, null, 0, methodCall.LogicalCallContext, methodCall);
 		}
